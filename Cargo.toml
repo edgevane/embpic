@@ -1,0 +1,11 @@
+[package]
+name = "embpic"
+version = "0.1.0"
+edition = "2024"
+description = "Minimal no_std image for embedded"
+license = "MIT"
+repository = "https://github.com/edgevane/embpic"
+keywords = ["embedded", "no_std", "image", "rgb", "graphics"]
+categories = ["embedded", "graphics"]
+
+[dependencies]
