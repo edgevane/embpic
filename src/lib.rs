@@ -4,9 +4,10 @@ extern crate alloc;
 
 pub mod color;
 pub mod image;
+mod internal;
 
 pub use color::Color;
-pub use image::Image;
+pub use image::{Image, LoadError};
 
 #[cfg(test)]
 mod tests {
