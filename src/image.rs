@@ -33,6 +33,15 @@ impl Image {
         }
     }
 
+    /// Save image by file extension: `.jpg` / `.jpeg` supported.
+    pub fn save(&self, path: &str) -> Result<(), LoadError> {
+        if has_jpg_ext(path) {
+            crate::internal::jpg::save(self, path).map_err(LoadError::Jpg)
+        } else {
+            Err(LoadError::UnknownExtension)
+        }
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }

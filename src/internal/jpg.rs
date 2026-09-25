@@ -18,6 +18,8 @@ pub enum Error {
     Truncated,
     Unsupported,
     BadHuffman,
+    Encode,
+    Write(i32),
 }
 
 const ZIGZAG: [usize; 64] = [
@@ -143,7 +145,8 @@ fn cos16(k: u32) -> f32 {
     if k < 16 {
         T[k as usize]
     } else {
-        -T[(32 - k) as usize]
+        // cos(pi + t) = -cos(t)
+        -T[(k - 16) as usize]
     }
 }
 
@@ -491,4 +494,313 @@ pub fn mmap(path: &str) -> Result<MappedFile, Error> {
 pub fn load(path: &str) -> Result<Image, Error> {
     let m = mmap(path)?;
     decode(m.as_bytes())
+}
+
+// --- baseline encoder (8-bit sequential, 3 comps, 4:4:4) ---
+
+/// Luma quant table, natural order (IJG Annex K, quality 50).
+const Q_LUMA: [u16; 64] = [
+    16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13,
+    16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56,
+    68, 109, 103, 77, 24, 35, 55, 64, 81, 104, 113, 92, 49, 64, 78, 87, 103,
+    121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99,
+];
+
+/// Chroma quant table, natural order (IJG Annex K, quality 50).
+const Q_CHROMA: [u16; 64] = [
+    17, 18, 24, 47, 99, 99, 99, 99, 18, 21, 26, 66, 99, 99, 99, 99, 24, 26,
+    56, 99, 99, 99, 99, 99, 47, 66, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+];
+
+fn fdct(block: &[f32; 64]) -> [i32; 64] {
+    let mut out = [0i32; 64];
+    for v in 0..8 {
+        for u in 0..8 {
+            let mut s = 0.0;
+            for y in 0..8 {
+                for x in 0..8 {
+                    s += block[y * 8 + x]
+                        * cos16(((2 * x + 1) * u) as u32)
+                        * cos16(((2 * y + 1) * v) as u32);
+                }
+            }
+            let cu = if u == 0 { 0.70710678 } else { 1.0 };
+            let cv = if v == 0 { 0.70710678 } else { 1.0 };
+            // round-half-away without libm (no_std).
+            let x = 0.25 * cu * cv * s;
+            out[v * 8 + u] =
+                if x >= 0.0 { (x + 0.5) as i32 } else { (x - 0.5) as i32 };
+        }
+    }
+    out
+}
+
+fn category(v: i32) -> u8 {
+    let mut a = if v < 0 { -v } else { v };
+    let mut n = 0;
+    while a > 0 {
+        n += 1;
+        a >>= 1;
+    }
+    n
+}
+
+/// Canonical encode map built from counts+symbols: symbol -> (code, len).
+struct EncTable {
+    map: [(u16, u8); 256],
+}
+
+impl EncTable {
+    fn build(counts: [u8; 16], symbols: &[u8]) -> Self {
+        let mut map = [(0u16, 0u8); 256];
+        let mut code: u16 = 0;
+        let mut k = 0;
+        for (i, &n) in counts.iter().enumerate() {
+            for _ in 0..n {
+                if k < symbols.len() {
+                    map[symbols[k] as usize] = (code, (i + 1) as u8);
+                    k += 1;
+                }
+                code += 1;
+            }
+            code <<= 1;
+        }
+        Self { map }
+    }
+}
+
+fn dc_symbols() -> Vec<u8> {
+    (0u8..12).collect()
+}
+
+fn ac_symbols() -> Vec<u8> {
+    // EOB, ZRL, then all (run 0..=15, size 1..=10) combos.
+    let mut v = Vec::with_capacity(162);
+    v.push(0x00);
+    v.push(0xF0);
+    for run in 0..16u8 {
+        for size in 1..=10u8 {
+            let rs = (run << 4) | size;
+            if rs != 0x00 && rs != 0xF0 {
+                v.push(rs);
+            }
+        }
+    }
+    v
+}
+
+struct BitWriter {
+    out: Vec<u8>,
+    acc: u32,
+    nbits: u8,
+}
+
+impl BitWriter {
+    fn new() -> Self {
+        Self { out: Vec::new(), acc: 0, nbits: 0 }
+    }
+    fn bits(&mut self, code: u16, len: u8) {
+        self.acc = (self.acc << len) | (code as u32);
+        self.nbits += len;
+        while self.nbits >= 8 {
+            self.nbits -= 8;
+            let b = (self.acc >> self.nbits) as u8;
+            self.out.push(b);
+            if b == 0xFF {
+                self.out.push(0x00);
+            }
+            self.acc &= (1 << self.nbits) - 1;
+        }
+    }
+    fn amplitude(&mut self, v: i32, size: u8) {
+        if size == 0 {
+            return;
+        }
+        let bits = if v >= 0 { v as u16 } else { (v + (1 << size) - 1) as u16 };
+        self.bits(bits, size);
+    }
+    fn finish(mut self) -> Vec<u8> {
+        if self.nbits > 0 {
+            let b = (self.acc << (8 - self.nbits)) as u8 | ((1 << (8 - self.nbits)) - 1);
+            self.out.push(b);
+            if b == 0xFF {
+                self.out.push(0x00);
+            }
+        }
+        self.out
+    }
+}
+
+fn be16(v: u16, out: &mut Vec<u8>) {
+    out.extend_from_slice(&v.to_be_bytes());
+}
+
+fn encode_image(img: &Image) -> Result<Vec<u8>, Error> {
+    let w = img.width();
+    let h = img.height();
+    if w == 0 || h == 0 || w > 65500 || h > 65500 {
+        return Err(Error::Encode);
+    }
+    let rgb = img.as_rgb();
+
+    let dc_syms = dc_symbols();
+    let ac_syms = ac_symbols();
+    let dc_counts = [0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let mut ac_counts = [0u8; 16];
+    ac_counts[7] = 162;
+    let dc_enc = EncTable::build(dc_counts, &dc_syms);
+    let ac_enc = EncTable::build(ac_counts, &ac_syms);
+
+    let mut out = Vec::new();
+    // SOI
+    out.extend_from_slice(&[0xFF, 0xD8]);
+    // APP0 JFIF
+    out.extend_from_slice(&[
+        0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01,
+        0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+    ]);
+    // DQT: table 0 = luma, table 1 = chroma (zigzag order on wire)
+    out.extend_from_slice(&[0xFF, 0xDB, 0x00, 0x84, 0x00]);
+    for j in 0..64 {
+        out.push(Q_LUMA[ZIGZAG[j]] as u8);
+    }
+    out.push(0x01);
+    for j in 0..64 {
+        out.push(Q_CHROMA[ZIGZAG[j]] as u8);
+    }
+    // SOF0
+    out.extend_from_slice(&[0xFF, 0xC0]);
+    be16(8 + 3 * 3, &mut out);
+    out.push(8);
+    be16(h as u16, &mut out);
+    be16(w as u16, &mut out);
+    out.push(3);
+    out.extend_from_slice(&[0x01, 0x11, 0x00]); // Y
+    out.extend_from_slice(&[0x02, 0x11, 0x01]); // Cb
+    out.extend_from_slice(&[0x03, 0x11, 0x01]); // Cr
+    // DHT: 4 tables (class,id): DC0, AC0, DC1, AC1
+    for &(class, id, counts, syms) in [
+        (0u8, 0u8, dc_counts, dc_syms.as_slice()),
+        (1u8, 0u8, ac_counts, ac_syms.as_slice()),
+        (0u8, 1u8, dc_counts, dc_syms.as_slice()),
+        (1u8, 1u8, ac_counts, ac_syms.as_slice()),
+    ]
+    .iter()
+    {
+        let total: usize = counts.iter().map(|&c| c as usize).sum();
+        out.extend_from_slice(&[0xFF, 0xC4]);
+        be16((2 + 1 + 16 + total) as u16, &mut out);
+        out.push((class << 4) | id);
+        out.extend_from_slice(&counts);
+        out.extend_from_slice(&syms[..total]);
+    }
+    // SOS
+    out.extend_from_slice(&[
+        0xFF, 0xDA, 0x00, 0x0C, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11,
+        0x00, 0x3F, 0x00,
+    ]);
+
+    // Scan: 4:4:4, one 8x8 block per component per MCU position.
+    let bw = w.div_ceil(8);
+    let bh = h.div_ceil(8);
+    let mut bwtr = BitWriter::new();
+    let mut prev_dc = [0i32; 3];
+    let mut fblock = [0f32; 64];
+    for my in 0..bh {
+        for mx in 0..bw {
+            for ci in 0..3 {
+                for y in 0..8 {
+                    for x in 0..8 {
+                        let px = (mx * 8 + x as u32).min(w - 1);
+                        let py = (my * 8 + y as u32).min(h - 1);
+                        let i = ((py * w + px) * 3) as usize;
+                        let (r, g, b) =
+                            (rgb[i] as f32, rgb[i + 1] as f32, rgb[i + 2] as f32);
+                        fblock[y * 8 + x] = match ci {
+                            0 => 0.299 * r + 0.587 * g + 0.114 * b - 128.0,
+                            1 => -0.168736 * r - 0.331264 * g + 0.5 * b,
+                            _ => 0.5 * r - 0.418688 * g - 0.081312 * b,
+                        };
+                    }
+                }
+                let d = fdct(&fblock);
+                let q = if ci == 0 { &Q_LUMA } else { &Q_CHROMA };
+                let mut zz = [0i32; 64];
+                for (j, z) in zz.iter_mut().enumerate() {
+                    let v = d[j];
+                    *z = if v >= 0 {
+                        ((v + (q[j] as i32 / 2)) / q[j] as i32) as i32
+                    } else {
+                        -(((-v) + (q[j] as i32 / 2)) / q[j] as i32)
+                    };
+                }
+                let is_luma = ci == 0;
+                let dc_t = &dc_enc;
+                let ac_t = &ac_enc;
+                let _ = is_luma;
+                let diff = zz[0] - prev_dc[ci];
+                prev_dc[ci] = zz[0];
+                let s = category(diff);
+                let (code, len) = dc_t.map[s as usize];
+                bwtr.bits(code, len);
+                bwtr.amplitude(diff, s);
+                // AC in zigzag order
+                let mut zero_run = 0;
+                let mut k = 1usize;
+                while k < 64 {
+                    let v = zz[ZIGZAG[k]];
+                    if v == 0 {
+                        zero_run += 1;
+                        k += 1;
+                        continue;
+                    }
+                    while zero_run > 15 {
+                        let (code, len) = ac_t.map[0xF0];
+                        bwtr.bits(code, len);
+                        zero_run -= 16;
+                    }
+                    let s = category(v);
+                    let rs = ((zero_run << 4) | s as i32) as u8;
+                    let (code, len) = ac_t.map[rs as usize];
+                    bwtr.bits(code, len);
+                    bwtr.amplitude(v, s);
+                    zero_run = 0;
+                    k += 1;
+                }
+                if zero_run > 0 {
+                    let (code, len) = ac_t.map[0x00];
+                    bwtr.bits(code, len);
+                }
+            }
+        }
+    }
+    out.extend_from_slice(&bwtr.finish());
+    out.extend_from_slice(&[0xFF, 0xD9]);
+    Ok(out)
+}
+
+/// Encode + write file via raw write() loop. Linux x86_64 only.
+pub fn save(img: &Image, path: &str) -> Result<(), Error> {
+    let bytes = encode_image(img)?;
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        use crate::internal::platform::linux_x86 as p;
+        let c = to_cstring(path);
+        let fd = p::open(
+            c.as_ptr(),
+            p::O_WRONLY | p::O_CREAT | p::O_TRUNC,
+            0o644,
+        )
+        .map_err(Error::Open)?;
+        let r = p::write_all(fd, &bytes).map_err(Error::Write);
+        let _ = p::close(fd);
+        r
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    {
+        let _ = (img, path, bytes);
+        Err(Error::UnsupportedPlatform)
+    }
 }
