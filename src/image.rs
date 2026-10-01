@@ -47,6 +47,38 @@ impl Image {
         d.denoise(self)
     }
 
+    /// Filter via any [`crate::filter::Filter`]. Returns a new image.
+    pub fn filter(&self, f: &impl crate::filter::Filter) -> Self {
+        f.apply(self)
+    }
+
+    /// Per-channel min-max normalize: each channel stretched so its
+    /// min maps to 0 and max to 255. Flat channels pass through.
+    /// Returns a new image; `Self` untouched.
+    pub fn normalize(&self) -> Self {
+        let src = self.as_rgb();
+        let mut min = [255u8; 3];
+        let mut max = [0u8; 3];
+        for px in src.chunks_exact(3) {
+            for c in 0..3 {
+                min[c] = min[c].min(px[c]);
+                max[c] = max[c].max(px[c]);
+            }
+        }
+        let mut out = Vec::with_capacity(src.len());
+        out.extend_from_slice(src);
+        for px in out.chunks_exact_mut(3) {
+            for c in 0..3 {
+                if max[c] > min[c] {
+                    px[c] = (((px[c] as u32 - min[c] as u32) * 255)
+                        / (max[c] as u32 - min[c] as u32))
+                        as u8;
+                }
+            }
+        }
+        Self { width: self.width, height: self.height, buf: out }
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }

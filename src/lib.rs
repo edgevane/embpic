@@ -4,6 +4,7 @@ extern crate alloc;
 
 pub mod color;
 pub mod denoise;
+pub mod filter;
 pub mod image;
 pub mod resize;
 mod internal;
@@ -116,5 +117,56 @@ mod tests {
         let out = img.denoise(&denoisers::mean(1));
         let c = out.get_pixel(2, 2).unwrap();
         assert!(c.r > 0 && c.r < 255, "got {c:?}");
+    }
+
+    #[test]
+    fn filter_grayscale_red() {
+        use crate::filter::filters;
+        let mut img = Image::new(1, 1);
+        img.put_pixel(0, 0, Color::rgb(255, 0, 0));
+        let out = img.filter(&filters::grayscale());
+        // 0.299*255 = 76.2 -> 76
+        assert_eq!(out.get_pixel(0, 0), Some(Color::rgb(76, 76, 76)));
+    }
+
+    #[test]
+    fn filter_contrast_noop_and_punch() {
+        use crate::filter::filters;
+        let mut img = Image::new(2, 1);
+        img.put_pixel(0, 0, Color::rgb(100, 100, 100));
+        img.put_pixel(1, 0, Color::rgb(200, 200, 200));
+        let same = img.filter(&filters::high_contrast(1.0));
+        assert_eq!(same.as_rgb(), img.as_rgb());
+        let punch = img.filter(&filters::high_contrast(2.0));
+        assert_eq!(punch.get_pixel(0, 0), Some(Color::rgb(72, 72, 72)));
+        assert_eq!(punch.get_pixel(1, 0), Some(Color::WHITE));
+    }
+
+    #[test]
+    fn normalize_stretches_and_keeps_flat() {
+        let mut img = Image::new(3, 1);
+        img.put_pixel(0, 0, Color::rgb(50, 10, 200));
+        img.put_pixel(1, 0, Color::rgb(100, 10, 200));
+        img.put_pixel(2, 0, Color::rgb(150, 10, 200));
+        let out = img.normalize();
+        // R: 50->0, 100->127, 150->255; G/B flat -> unchanged
+        assert_eq!(out.get_pixel(0, 0), Some(Color::rgb(0, 10, 200)));
+        assert_eq!(out.get_pixel(1, 0), Some(Color::rgb(127, 10, 200)));
+        assert_eq!(out.get_pixel(2, 0), Some(Color::rgb(255, 10, 200)));
+    }
+
+    #[test]
+    fn filter_gaussian_solid_and_noop() {
+        use crate::filter::filters;
+        let mut img = Image::new(5, 5);
+        for y in 0..5 {
+            for x in 0..5 {
+                img.put_pixel(x, y, Color::rgb(40, 50, 60));
+            }
+        }
+        let soft = img.filter(&filters::gaussian(1.5));
+        assert!(soft.as_rgb().chunks_exact(3).all(|p| p == [40, 50, 60]));
+        let copy = img.filter(&filters::gaussian(0.0));
+        assert_eq!(copy.as_rgb(), img.as_rgb());
     }
 }
