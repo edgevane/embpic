@@ -33,4 +33,46 @@ mod tests {
         assert_eq!(img.get_pixel(5, 5), None);
         assert_eq!(img.as_rgb(), &[0; 12]);
     }
+
+    #[test]
+    fn resize_up_bilinear() {
+        let mut img = Image::new(2, 2);
+        img.put_pixel(0, 0, Color::rgb(0, 0, 0));
+        img.put_pixel(1, 0, Color::rgb(100, 0, 0));
+        img.put_pixel(0, 1, Color::rgb(0, 100, 0));
+        img.put_pixel(1, 1, Color::rgb(0, 0, 100));
+        // corners map exactly
+        let big = img.resize(4, 4);
+        assert_eq!(big.width(), 4);
+        assert_eq!(big.height(), 4);
+        assert_eq!(big.get_pixel(0, 0), Some(Color::rgb(0, 0, 0)));
+        assert_eq!(big.get_pixel(3, 0), Some(Color::rgb(100, 0, 0)));
+        assert_eq!(big.get_pixel(0, 3), Some(Color::rgb(0, 100, 0)));
+        assert_eq!(big.get_pixel(3, 3), Some(Color::rgb(0, 0, 100)));
+        // 2x2 -> 3x3 center = exact average of corners
+        let mid = img.resize(3, 3);
+        assert_eq!(mid.get_pixel(1, 1), Some(Color::rgb(25, 25, 25)));
+    }
+
+    #[test]
+    fn resize_nearest_keeps_blocks() {
+        let mut img = Image::new(2, 2);
+        img.put_pixel(0, 0, Color::RED);
+        img.put_pixel(1, 0, Color::GREEN);
+        img.put_pixel(0, 1, Color::BLUE);
+        img.put_pixel(1, 1, Color::WHITE);
+        let big = img.resize_nearest(4, 4);
+        assert_eq!(big.get_pixel(0, 0), Some(Color::RED));
+        assert_eq!(big.get_pixel(1, 1), Some(Color::RED));
+        assert_eq!(big.get_pixel(3, 3), Some(Color::WHITE));
+    }
+
+    #[test]
+    fn resize_down_and_zero() {
+        let img = Image::new(4, 4);
+        let small = img.resize(2, 2);
+        assert_eq!((small.width(), small.height()), (2, 2));
+        let empty = img.resize(0, 10);
+        assert_eq!(empty.as_rgb(), &[]);
+    }
 }
