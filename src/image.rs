@@ -42,6 +42,11 @@ impl Image {
         }
     }
 
+    /// Denoise via any [`crate::denoise::Denoiser`]. Returns a new image.
+    pub fn denoise(&self, d: &impl crate::denoise::Denoiser) -> Self {
+        d.denoise(self)
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -72,77 +77,9 @@ impl Image {
         Some(Color::rgb(self.buf[i], self.buf[i + 1], self.buf[i + 2]))
     }
 
-    /// Nearest-neighbor resize. Fast, blocky; use `resize` for smooth.
-    /// Returns a new image; `Self` untouched.
-    pub fn resize_nearest(&self, new_width: u32, new_height: u32) -> Self {
-        if new_width == 0 || new_height == 0 || self.width == 0 || self.height == 0
-        {
-            return Self::new(new_width, new_height);
-        }
-        let mut out = Self::new(new_width, new_height);
-        for y in 0..new_height {
-            let sy = (y * self.height / new_height).min(self.height - 1);
-            for x in 0..new_width {
-                let sx = (x * self.width / new_width).min(self.width - 1);
-                let s = ((sy * self.width + sx) * 3) as usize;
-                let d = ((y * new_width + x) * 3) as usize;
-                out.buf[d] = self.buf[s];
-                out.buf[d + 1] = self.buf[s + 1];
-                out.buf[d + 2] = self.buf[s + 2];
-            }
-        }
-        out
-    }
-
-    /// Bilinear resize. Returns a new image; `Self` untouched.
-    /// Corners map exactly; zero `new_width`/`new_height` yields empty.
-    pub fn resize(&self, new_width: u32, new_height: u32) -> Self {
-        if new_width == 0 || new_height == 0 || self.width == 0 || self.height == 0
-        {
-            return Self::new(new_width, new_height);
-        }
-        if self.width == 1 && self.height == 1 {
-            let mut out = Self::new(new_width, new_height);
-            for px in out.buf.chunks_exact_mut(3) {
-                px.copy_from_slice(&self.buf[..3]);
-            }
-            return out;
-        }
-        let mut out = Self::new(new_width, new_height);
-        let x_scale = if new_width > 1 {
-            (self.width - 1) as f32 / (new_width - 1) as f32
-        } else {
-            0.0
-        };
-        let y_scale = if new_height > 1 {
-            (self.height - 1) as f32 / (new_height - 1) as f32
-        } else {
-            0.0
-        };
-        for y in 0..new_height {
-            let sy = y as f32 * y_scale;
-            let y0 = (sy as u32).min(self.height - 1);
-            let y1 = (y0 + 1).min(self.height - 1);
-            let fy = sy - y0 as f32;
-            for x in 0..new_width {
-                let sx = x as f32 * x_scale;
-                let x0 = (sx as u32).min(self.width - 1);
-                let x1 = (x0 + 1).min(self.width - 1);
-                let fx = sx - x0 as f32;
-                let d = ((y * new_width + x) * 3) as usize;
-                for c in 0..3 {
-                    let p00 = self.buf[((y0 * self.width + x0) * 3) as usize + c] as f32;
-                    let p10 = self.buf[((y0 * self.width + x1) * 3) as usize + c] as f32;
-                    let p01 = self.buf[((y1 * self.width + x0) * 3) as usize + c] as f32;
-                    let p11 = self.buf[((y1 * self.width + x1) * 3) as usize + c] as f32;
-                    let top = p00 + (p10 - p00) * fx;
-                    let bot = p01 + (p11 - p01) * fx;
-                    let v = top + (bot - top) * fy;
-                    out.buf[d + c] = v.clamp(0.0, 255.0) as u8;
-                }
-            }
-        }
-        out
+    /// Resize via any [`crate::resize::Resizer`]. Returns a new image.
+    pub fn resize(&self, r: &impl crate::resize::Resizer) -> Self {
+        r.resize(self)
     }
 }
 
