@@ -24,19 +24,23 @@ impl Image {
         Self { width, height, buf }
     }
 
-    /// Load image by file extension: `.jpg` / `.jpeg` supported.
+    /// Load image by file extension: `.jpg` / `.jpeg` / `.webp` supported.
     pub fn load(path: &str) -> Result<Self, LoadError> {
         if has_jpg_ext(path) {
             crate::internal::jpg::load(path).map_err(LoadError::Jpg)
+        } else if has_webp_ext(path) {
+            crate::internal::webp::load(path).map_err(LoadError::Webp)
         } else {
             Err(LoadError::UnknownExtension)
         }
     }
 
-    /// Save image by file extension: `.jpg` / `.jpeg` supported.
+    /// Save image by file extension: `.jpg` / `.jpeg` / `.webp` supported.
     pub fn save(&self, path: &str) -> Result<(), LoadError> {
         if has_jpg_ext(path) {
             crate::internal::jpg::save(self, path).map_err(LoadError::Jpg)
+        } else if has_webp_ext(path) {
+            crate::internal::webp::save(self, path).map_err(LoadError::Webp)
         } else {
             Err(LoadError::UnknownExtension)
         }
@@ -116,19 +120,25 @@ impl Image {
 }
 
 fn has_jpg_ext(path: &str) -> bool {
+    has_ext(path, b".jpg") || has_ext(path, b".jpeg")
+}
+
+fn has_webp_ext(path: &str) -> bool {
+    has_ext(path, b".webp")
+}
+
+fn has_ext(path: &str, s: &[u8]) -> bool {
     let b = path.as_bytes();
-    let check = |s: &[u8]| {
-        b.len() >= s.len()
-            && b[b.len() - s.len()..]
-                .iter()
-                .zip(s.iter())
-                .all(|(a, c)| a.to_ascii_lowercase() == *c)
-    };
-    check(b".jpg") || check(b".jpeg")
+    b.len() >= s.len()
+        && b[b.len() - s.len()..]
+            .iter()
+            .zip(s.iter())
+            .all(|(a, c)| a.to_ascii_lowercase() == *c)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadError {
     UnknownExtension,
     Jpg(crate::internal::JpgError),
+    Webp(crate::internal::WebpError),
 }

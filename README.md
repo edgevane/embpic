@@ -1,6 +1,6 @@
 # embpic
 
-Minimal `no_std` image buffer for embedded. JPEG load/save.
+Minimal `no_std` image buffer for embedded. JPEG + WebP load/save.
 
 ```rust
 use embpic::{denoise::denoisers, filter::filters, resize::resizers, Color, Image};
@@ -27,8 +27,8 @@ let punch = img.filter(&filters::high_contrast(1.8));
 |---|---|
 | `Image::new(w, h)` | black RGB buffer (`alloc::vec`) |
 | `Image::from_rgb(w, h, buf)` | wrap raw RGB bytes |
-| `Image::load(path)` | `.jpg` / `.jpeg`, via mmap syscalls |
-| `img.save(path)` | baseline JPEG encoder (q50, 4:4:4) |
+| `Image::load(path)` | `.jpg` / `.jpeg`, via mmap syscalls; `.webp` lossless VP8L |
+| `img.save(path)` | baseline JPEG encoder (q50, 4:4:4); lossless WebP encoder |
 | `img.resize(&resizers::bilinear(w, h))` | smooth (default choice) |
 | `img.resize(&resizers::nearest(w, h))` | fast, blocky |
 | `img.denoise(&denoisers::mean(r))` | box blur, cheap |
@@ -51,4 +51,5 @@ let punch = img.filter(&filters::high_contrast(1.8));
 
 - JPEG baseline 8-bit only (no progressive)..
 - Encoder: fixed quality (~q50), no subsampling.
+- WebP lossless encoder profile only (no transforms, no meta-huffman, no color cache); decode handles LZ77 length/distance too.
 - `resize` uses plain `f32` arithmetic only.
