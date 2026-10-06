@@ -13,5 +13,5 @@ pub(crate) fn high_contrast(img: &Image, factor: f32) -> Image {
     for (d, s) in out.iter_mut().zip(src.iter()) {
         *d = ((*s as f32 - 128.0) * factor + 128.0).clamp(0.0, 255.0) as u8;
     }
-    Image::from_rgb(w, h, out)
+    Image::from_rgb_like(img, w, h, out)
 }

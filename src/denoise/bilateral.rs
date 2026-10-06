@@ -1,5 +1,5 @@
 //! Private bilateral backend (edge-preserving, clamped borders).
-//! Gaussian weights via branchless fast-exp (no libm, no_std-safe).
+//! Gaussian weights via branchless fast-exp.
 
 extern crate alloc;
 
@@ -13,7 +13,7 @@ pub(crate) fn bilateral(
 ) -> Image {
     let (w, h) = (img.width(), img.height());
     if radius == 0 || w == 0 || h == 0 {
-        return Image::from_rgb(w, h, img.as_rgb().to_vec());
+        return Image::from_rgb_like(img, w, h, img.as_rgb().to_vec());
     }
     let src = img.as_rgb();
     let r = radius as i32;
@@ -57,5 +57,5 @@ pub(crate) fn bilateral(
             out[d + 2] = (acc[2] * inv + 0.5).clamp(0.0, 255.0) as u8;
         }
     }
-    Image::from_rgb(w, h, out)
+    Image::from_rgb_like(img, w, h, out)
 }

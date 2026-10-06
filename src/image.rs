@@ -2,11 +2,13 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use crate::Color;
+use crate::Exif;
 
 pub struct Image {
     width: u32,
     height: u32,
     buf: Vec<u8>,
+    metadata: Exif,
 }
 
 impl Image {
@@ -16,12 +18,32 @@ impl Image {
             width,
             height,
             buf: alloc::vec![0; len],
+            metadata: Exif::new(),
         }
     }
 
     pub fn from_rgb(width: u32, height: u32, buf: Vec<u8>) -> Self {
         debug_assert_eq!(buf.len(), (width as usize) * (height as usize) * 3);
-        Self { width, height, buf }
+        Self { width, height, buf, metadata: Exif::new() }
+    }
+
+    pub(crate) fn from_rgb_like(src: &Image, width: u32, height: u32, buf: Vec<u8>) -> Self {
+        Self { width, height, buf, metadata: src.metadata.clone() }
+    }
+
+    /// EXIF metadata (parsed on `load`, preserved by ops and `save`).
+    pub fn metadata(&self) -> &Exif {
+        &self.metadata
+    }
+
+    /// Replace EXIF metadata.
+    pub fn set_metadata(&mut self, m: Exif) {
+        self.metadata = m;
+    }
+
+    /// Reset EXIF metadata to default (orientation 1, no tags).
+    pub fn clear_metadata(&mut self) {
+        self.metadata = Exif::new();
     }
 
     /// Load image by file extension: `.jpg` / `.jpeg` / `.webp` supported.
@@ -80,7 +102,7 @@ impl Image {
                 }
             }
         }
-        Self { width: self.width, height: self.height, buf: out }
+        Self { width: self.width, height: self.height, buf: out, metadata: self.metadata.clone() }
     }
 
     pub fn width(&self) -> u32 {

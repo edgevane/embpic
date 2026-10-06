@@ -1,5 +1,4 @@
 //! Raw Linux x86_64 syscalls (syscall instruction, System V).
-//! Clean wrappers: no libc, no std, only `core` + `alloc` at call sites.
 
 use core::arch::asm;
 

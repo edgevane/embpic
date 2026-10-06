@@ -20,7 +20,7 @@ pub(crate) fn bilinear(img: &Image, new_width: u32, new_height: u32) -> Image {
         for dst in buf.chunks_exact_mut(3) {
             dst.copy_from_slice(px);
         }
-        return Image::from_rgb(new_width, new_height, buf);
+        return Image::from_rgb_like(img, new_width, new_height, buf);
     }
     let mut buf = alloc::vec![0u8; (new_width * new_height * 3) as usize];
     let x_scale = if new_width > 1 {
@@ -57,5 +57,5 @@ pub(crate) fn bilinear(img: &Image, new_width: u32, new_height: u32) -> Image {
             }
         }
     }
-    Image::from_rgb(new_width, new_height, buf)
+    Image::from_rgb_like(img, new_width, new_height, buf)
 }

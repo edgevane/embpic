@@ -1,4 +1,4 @@
-//! Tiny float helpers shared by backends (no libm, no_std-safe).
+//! Tiny float helpers shared by backends.
 
 /// e^-x for x >= 0 (Schraudolph approx, clamped to [0, 1]).
 pub(crate) fn exp_neg(x: f32) -> f32 {

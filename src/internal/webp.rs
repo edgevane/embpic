@@ -5,7 +5,7 @@
 //! Pixels literal-only on encode; decode also handles LZ77
 //! length/distance codes (nearest-window copy).
 //!
-//! Limits: lossless only, no ICC/EXIF/XMP chunks, no animation.
+//! Limits: lossless only, no ICC/XMP chunks, no animation.
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -425,11 +425,10 @@ fn dist_params(sym: u16) -> (u32, u8) {
 }
 
 pub fn decode(data: &[u8]) -> Result<Image, Error> {
-    // RIFF....WEBPVP8L
+    // RIFF....WEBP(VP8L | VP8X-extended)
     if data.len() < 21
         || &data[0..4] != b"RIFF"
         || &data[8..12] != b"WEBP"
-        || &data[12..16] != b"VP8L"
     {
         return Err(Error::NotWebp);
     }
@@ -437,6 +436,13 @@ pub fn decode(data: &[u8]) -> Result<Image, Error> {
         u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
     if data.len() < 8 + riff_size {
         return Err(Error::Truncated);
+    }
+    // Extended container: VP8X + chunk list (VP8L + optional EXIF).
+    if &data[12..16] == b"VP8X" {
+        return decode_extended(data, riff_size);
+    }
+    if &data[12..16] != b"VP8L" {
+        return Err(Error::NotWebp);
     }
     let sig = data[20];
     if sig != 0x2F {
@@ -513,6 +519,45 @@ pub fn decode(data: &[u8]) -> Result<Image, Error> {
     Ok(Image::from_rgb(width, height, rgb))
 }
 
+/// Extended WebP (VP8X): find VP8L + EXIF chunks, decode pixels,
+/// attach EXIF metadata (default when absent).
+fn decode_extended(data: &[u8], riff_size: usize) -> Result<Image, Error> {
+    // data[12..20] = VP8X fourcc + size, data[20..30] = 10-byte payload.
+    if data.len() < 30 {
+        return Err(Error::Truncated);
+    }
+    let end = (8 + riff_size).min(data.len());
+    let mut off = 30usize;
+    let mut vp8l_range: Option<(usize, usize)> = None;
+    let mut exif = crate::exif::Exif::new();
+    while off + 8 <= end {
+        let four = &data[off..off + 4];
+        let size =
+            u32::from_le_bytes([data[off + 4], data[off + 5], data[off + 6], data[off + 7]])
+                as usize;
+        let body_start = off + 8;
+        let body_end = (body_start + size).min(end);
+        let body = &data[body_start..body_end];
+        if four == b"VP8L" && vp8l_range.is_none() {
+            vp8l_range = Some((off, body_end - off));
+        } else if four == b"EXIF" {
+            exif = crate::exif::parse_tiff(body);
+        }
+        off = body_end + (size % 2);
+    }
+    let (coff, clen) = vp8l_range.ok_or(Error::Unsupported)?;
+    let body = &data[coff..coff + clen];
+    // Wrap body back into RIFF/VP8L layout expected by decode().
+    let mut full = Vec::with_capacity(body.len() + 20);
+    full.extend_from_slice(b"RIFF");
+    full.extend_from_slice(&((4 + body.len()) as u32).to_le_bytes());
+    full.extend_from_slice(b"WEBP");
+    full.extend_from_slice(body);
+    let mut img = decode(&full)?;
+    img.set_metadata(exif);
+    Ok(img)
+}
+
 fn encode_image(img: &Image) -> Result<Vec<u8>, Error> {
     let w = img.width();
     let h = img.height();
@@ -574,13 +619,48 @@ fn encode_image(img: &Image) -> Result<Vec<u8>, Error> {
 
     let mut out = Vec::new();
     out.extend_from_slice(b"RIFF");
-    let riff_size = 4 + 8 + chunk_data.len() + (chunk_data.len() % 2);
-    out.extend_from_slice(&(riff_size as u32).to_le_bytes());
+    let exif_tiff = crate::exif::encode_tiff(img.metadata());
+    if exif_tiff.is_empty() {
+        let riff_size = 4 + 8 + chunk_data.len() + (chunk_data.len() % 2);
+        out.extend_from_slice(&(riff_size as u32).to_le_bytes());
+        out.extend_from_slice(b"WEBP");
+        out.extend_from_slice(b"VP8L");
+        out.extend_from_slice(&(chunk_data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&chunk_data);
+        if chunk_data.len() % 2 == 1 {
+            out.push(0);
+        }
+        return Ok(out);
+    }
+    // Extended VP8X + VP8L + EXIF chunks.
+    let vp8l_len = chunk_data.len();
+    let exif_len = exif_tiff.len();
+    let chunks_len = (8 + vp8l_len + vp8l_len % 2) + (8 + exif_len + exif_len % 2);
+    out.extend_from_slice(&((4 + 18 + chunks_len) as u32).to_le_bytes());
     out.extend_from_slice(b"WEBP");
+    out.extend_from_slice(b"VP8X");
+    out.extend_from_slice(&10u32.to_le_bytes());
+    let mut flags = [0u8; 10];
+    flags[0] = 0x08; // EXIF present
+    let w1 = w - 1;
+    let h1 = h - 1; // 24-bit LE canvas size
+    flags[4] = (w1 & 0xFF) as u8;
+    flags[5] = ((w1 >> 8) & 0xFF) as u8;
+    flags[6] = ((w1 >> 16) & 0xFF) as u8;
+    flags[7] = (h1 & 0xFF) as u8;
+    flags[8] = ((h1 >> 8) & 0xFF) as u8;
+    flags[9] = ((h1 >> 16) & 0xFF) as u8;
+    out.extend_from_slice(&flags);
     out.extend_from_slice(b"VP8L");
-    out.extend_from_slice(&(chunk_data.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(vp8l_len as u32).to_le_bytes());
     out.extend_from_slice(&chunk_data);
-    if chunk_data.len() % 2 == 1 {
+    if vp8l_len % 2 == 1 {
+        out.push(0);
+    }
+    out.extend_from_slice(b"EXIF");
+    out.extend_from_slice(&(exif_len as u32).to_le_bytes());
+    out.extend_from_slice(&exif_tiff);
+    if exif_len % 2 == 1 {
         out.push(0);
     }
     Ok(out)

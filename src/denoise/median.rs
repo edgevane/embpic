@@ -9,7 +9,7 @@ use crate::image::Image;
 pub(crate) fn median(img: &Image, radius: u32) -> Image {
     let (w, h) = (img.width(), img.height());
     if radius == 0 || w == 0 || h == 0 {
-        return Image::from_rgb(w, h, img.as_rgb().to_vec());
+        return Image::from_rgb_like(img, w, h, img.as_rgb().to_vec());
     }
     let src = img.as_rgb();
     let r = radius as i32;
@@ -32,5 +32,5 @@ pub(crate) fn median(img: &Image, radius: u32) -> Image {
             }
         }
     }
-    Image::from_rgb(w, h, out)
+    Image::from_rgb_like(img, w, h, out)
 }

@@ -4,12 +4,14 @@ extern crate alloc;
 
 pub mod color;
 pub mod denoise;
+pub mod exif;
 pub mod filter;
 pub mod image;
 pub mod resize;
 mod internal;
 
 pub use color::Color;
+pub use exif::Exif;
 pub use image::{Image, LoadError};
 
 #[cfg(test)]

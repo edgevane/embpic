@@ -17,5 +17,5 @@ pub(crate) fn grayscale(img: &Image) -> Image {
         d[1] = v;
         d[2] = v;
     }
-    Image::from_rgb(w, h, out)
+    Image::from_rgb_like(img, w, h, out)
 }

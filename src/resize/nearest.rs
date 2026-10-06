@@ -23,5 +23,5 @@ pub(crate) fn nearest(img: &Image, new_width: u32, new_height: u32) -> Image {
             buf[d + 2] = src[s + 2];
         }
     }
-    Image::from_rgb(new_width, new_height, buf)
+    Image::from_rgb_like(img, new_width, new_height, buf)
 }

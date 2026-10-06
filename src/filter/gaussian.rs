@@ -11,7 +11,7 @@ use crate::internal::math::exp_neg;
 pub(crate) fn gaussian(img: &Image, sigma: f32) -> Image {
     let (w, h) = (img.width(), img.height());
     if sigma <= 0.0 || w == 0 || h == 0 {
-        return Image::from_rgb(w, h, img.as_rgb().to_vec());
+        return Image::from_rgb_like(img, w, h, img.as_rgb().to_vec());
     }
     let mut radius = (sigma * 3.0 + 0.5) as u32 + 1;
     radius = radius.min(16).max(1);
@@ -56,5 +56,5 @@ pub(crate) fn gaussian(img: &Image, sigma: f32) -> Image {
             }
         }
     }
-    Image::from_rgb(w, h, out)
+    Image::from_rgb_like(img, w, h, out)
 }

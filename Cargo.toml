@@ -1,6 +1,6 @@
 [package]
 name = "embpic"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 description = "Minimal no_std image for embedded"
 license = "MIT"

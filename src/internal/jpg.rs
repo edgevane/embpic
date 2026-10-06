@@ -134,7 +134,7 @@ fn extend(v: u16, t: u8) -> i32 {
     }
 }
 
-/// cos(k*pi/16) lookup — no libm needed in no_std.
+/// cos(k*pi/16) lookup.
 fn cos16(k: u32) -> f32 {
     const T: [f32; 16] = [
         1.0, 0.98078528, 0.92387953, 0.83146961, 0.70710678, 0.55557023,
@@ -425,7 +425,11 @@ pub fn decode(data: &[u8]) -> Result<Image, Error> {
             rgb.extend_from_slice(&[r, g, b]);
         }
     }
-    Ok(Image::from_rgb(width, height, rgb))
+    Ok({
+        let mut img = Image::from_rgb(width, height, rgb);
+        img.set_metadata(crate::exif::parse_jpeg(data));
+        img
+    })
 }
 
 // --- file transport (mmap/read) ---
@@ -528,7 +532,7 @@ fn fdct(block: &[f32; 64]) -> [i32; 64] {
             }
             let cu = if u == 0 { 0.70710678 } else { 1.0 };
             let cv = if v == 0 { 0.70710678 } else { 1.0 };
-            // round-half-away without libm (no_std).
+            // round-half-away.
             let x = 0.25 * cu * cv * s;
             out[v * 8 + u] =
                 if x >= 0.0 { (x + 0.5) as i32 } else { (x - 0.5) as i32 };
@@ -656,6 +660,8 @@ fn encode_image(img: &Image) -> Result<Vec<u8>, Error> {
     let mut out = Vec::new();
     // SOI
     out.extend_from_slice(&[0xFF, 0xD8]);
+    // EXIF APP1 (if any), right after SOI per spec.
+    out.extend_from_slice(&crate::exif::encode_jpeg_app1(img.metadata()));
     // APP0 JFIF
     out.extend_from_slice(&[
         0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01,
